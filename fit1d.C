@@ -120,9 +120,24 @@ void fit1d(int entries=1000, bool save=false)
   auto h25 = TH1D("h25", "Test of Gauss dist;x;counts", n_bins, range[0], range[1]); 
   auto h1k = TH1D("h1k", "Test of Gauss dist;x;counts", n_bins, range[0], range[1]); 
   
-  //fill our histograms
-  for (int i=0; i<25; i++)  h25.Fill( rand.Gaus()*sigma + mean ); 
-  for (int i=0; i<1e3; i++) h1k.Fill( rand.Gaus()*sigma + mean );
+  TFitResultPtr fitptr_25, fitptr_1k;
+
+  //repeat this until we get a valid fit (sometimes it might fail!)
+  cout << "Trying to get valid fit..." << flush; 
+  do {
+
+    h25.Reset(); 
+    h1k.Reset(); 
+
+    //fill our histograms 
+    for (int i=0; i<25; i++)  h25.Fill( rand.Gaus()*sigma + mean ); 
+    for (int i=0; i<1e3; i++) h1k.Fill( rand.Gaus()*sigma + mean );
+
+    fitptr_25 = h25.Fit("gaus", "S Q N L");
+    fitptr_1k = h1k.Fit("gaus", "S Q N");  
+
+  } while (!(fitptr_25->IsValid() && fitptr_1k->IsValid())); 
+  cout << "done!" << endl; 
 
   //we're going to vary the mean slowly. 
   vector<double> pts_mean, pts_LL, pts_chi2; 
@@ -148,15 +163,68 @@ void fit1d(int entries=1000, bool save=false)
   auto c = new TCanvas("c", "Dependence of LL and Chi2 on mean", 1400, 600);
   c->Divide(2,1); 
   
+  auto vec_min = [](const vector<double>& v) {
+    double m=+1.e100; for (auto x : v) if (x < m) m = x; return m;  
+  }; 
+  auto vec_max = [](const vector<double>& v) {
+    double m=-1.e100; for (auto x : v) if (x > m) m = x; return m;  
+  }; 
+
+  TLine *line; 
+  double fit_mean, fit_mean_err; 
+  
   c->cd(1); 
   auto g_LL = new TGraph( pts_mean.size(), pts_mean.data(), pts_LL.data() ); 
   g_LL->SetTitle("Variance of -LL with mean (25 pts);Mean (diff. from actual);-Log Liklihood");
   g_LL->Draw(); 
 
+  fit_mean      = fitptr_25->Parameter(1) - mean; 
+  fit_mean_err  = fitptr_25->ParError(1); 
+  line = new TLine(
+    fit_mean, vec_min(pts_LL), 
+    fit_mean, vec_max(pts_LL)
+  ); 
+  line->SetLineColor(kRed);
+  line->Draw("SAME"); 
+  line = new TLine(
+    fit_mean + fit_mean_err, vec_min(pts_LL), 
+    fit_mean + fit_mean_err, vec_max(pts_LL)
+  ); 
+  line->SetLineColor(kRed); line->SetLineStyle(kDotted); 
+  line->Draw(); 
+  line = new TLine(
+    fit_mean - fit_mean_err, vec_min(pts_LL), 
+    fit_mean - fit_mean_err, vec_max(pts_LL)
+  );
+  line->SetLineColor(kRed); line->SetLineStyle(kDotted); 
+  line->Draw(); 
+
+
   c->cd(2); 
   auto g_chi2 = new TGraph( pts_mean.size(), pts_mean.data(), pts_chi2.data() ); 
   g_chi2->SetTitle("Variance of #chi^{2} with mean (10^{3} pts);Mean (diff. from actual);#chi^{2}");
   g_chi2->Draw(); 
+
+  fit_mean      = fitptr_1k->Parameter(1) - mean; 
+  fit_mean_err  = fitptr_1k->ParError(1); 
+  line = new TLine(
+    fit_mean, vec_min(pts_chi2), 
+    fit_mean, vec_max(pts_chi2)
+  ); 
+  line->SetLineColor(kRed);
+  line->Draw(); 
+  line = new TLine(
+    fit_mean + fit_mean_err, vec_min(pts_chi2), 
+    fit_mean + fit_mean_err, vec_max(pts_chi2)
+  ); 
+  line->SetLineColor(kRed); line->SetLineStyle(kDotted); 
+  line->Draw(); 
+  line = new TLine(
+    fit_mean - fit_mean_err, vec_min(pts_chi2), 
+    fit_mean - fit_mean_err, vec_max(pts_chi2)
+  );
+  line->SetLineColor(kRed); line->SetLineStyle(kDotted); 
+  line->Draw(); 
 
   return; 
 }
