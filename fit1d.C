@@ -18,7 +18,7 @@
 
 using namespace std; 
 
-const int n_points = 25; 
+const int n_points = 1e2; 
 const int n_experiments = 1e5; 
 const int n_bins = 100; 
 constexpr double range[] = {0., 100.}; 
@@ -28,8 +28,8 @@ constexpr double range[] = {0., 100.};
 const double mean_range[] = { 50., 50. };
 const double sigma_range[] = { 10., 10. }; 
 
-constexpr double mean_draw_range[] = { -8., 8. }; 
-
+constexpr int    mean_draw_pts = 100.; 
+constexpr double mean_draw_range = 8.; 
 
 //assumes PDF is properly normailized! 
 double log_liklihood(TH1D* hist, function<double(double)> PDF) 
@@ -70,6 +70,38 @@ double log_liklihood(TH1D* hist, function<double(double)> PDF)
   return LL; 
 } 
 
+//assumes PDF is properly normailized! 
+double chi2(TH1D* hist, function<double(double)> PDF) 
+{
+  double chi2 = 0.; 
+
+  auto ax = hist->GetXaxis(); 
+  
+  const int nbins = ax->GetNbins(); 
+
+  const double total_stats = hist->Integral(); 
+  const double dx = ( ax->GetXmax() - ax->GetXmin() )/((double)nbins-1); 
+
+  for (int b=1; b<=nbins; b++) {
+
+    //center of this bin 
+    double x = ax->GetBinCenter(b); 
+
+    //average number of stats we should EXPECT in this bin (if PDF is correct)
+    double expect = PDF(x) * dx * total_stats; 
+
+    double bin_stats = hist->GetBinContent(b); 
+
+    if (bin_stats < 0.1) continue;  
+    //now, add the log of the poisson prob. that 'N' stats would end up in this bin. 
+    
+    chi2 += pow( (bin_stats - expect), 2 )/expect;  
+  }
+
+  //return the total log liklihood
+  return chi2; 
+} 
+
 //NORMALIZED gaussian dist
 double normalized_gauss(double x, double mean, double sigma)
 {
@@ -77,7 +109,7 @@ double normalized_gauss(double x, double mean, double sigma)
 } 
 
 
-void fit1c(int entries=1000, bool save=false) 
+void fit1d(int entries=1000, bool save=false) 
 {
   TRandom3 rand;
 
@@ -85,78 +117,46 @@ void fit1c(int entries=1000, bool save=false)
   const double sigma = rand.Uniform( sigma_range[0], sigma_range[1] ); 
 
   //first, we must create the histogram and fill it with data according to a gaussian dist. 
-  auto h = TH1D("h", "Test of Gauss dist;x;counts", n_bins, range[0], range[1]); 
-  for (int i=0; i<n_points; i++) h.Fill( rand.Gaus()*sigma + mean ); 
+  auto h25 = TH1D("h25", "Test of Gauss dist;x;counts", n_bins, range[0], range[1]); 
+  auto h1k = TH1D("h1k", "Test of Gauss dist;x;counts", n_bins, range[0], range[1]); 
+  
+  //fill our histograms
+  for (int i=0; i<25; i++)  h25.Fill( rand.Gaus()*sigma + mean ); 
+  for (int i=0; i<1e3; i++) h1k.Fill( rand.Gaus()*sigma + mean );
 
-  //now, we will do a log-liklihood fit of this data. 
-  auto fitptr = h.Fit("gaus", "Q S N L");
+  //we're going to vary the mean slowly. 
+  vector<double> pts_mean, pts_LL, pts_chi2; 
 
-  //let's caclulate our own log-liklihood...
+  double test_mean = mean - mean_draw_range; 
 
-  // uiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii12
-  // --comment from assistant developer, Muon 
-
-  const double LL_fit = fitptr->Chi2(); 
+  const double dm = 2. * mean_draw_range / ((double)mean_draw_pts-1); 
 
   using namespace std::placeholders; 
-  auto norm_gaus = std::bind( normalized_gauss, _1, mean, sigma ); 
-
-  const double LL = -log_liklihood(&h, norm_gaus); 
-
-  auto h_LL = new TH1D(
-    "h_LL", 
-    Form("Distribution of Log-liklihood (%i points); (negative) Log Liklihood;",n_points), n_bins, 25, 75.); 
-
-  printf(
-    "Log liklihood calculated for %i points and %i bins:\n"
-    " - % .2e (from fit)\n"
-    " - % .2e (from my log_liklihood fcn)\n",
-    n_points, n_bins, 
-    LL_fit, 
-    LL
-  ); 
 
   //now, repeat this experiment many times to compare this value for reasonability. 
-  for (int i=0; i<n_experiments; i++) {
-    
-    h.Reset(); 
+  for (int i=0; i<mean_draw_pts; i++) {
+    pts_mean.push_back( test_mean - mean ); 
 
-    for (int i=0; i<n_points; i++) h.Fill( rand.Gaus()*sigma + mean ); 
+    auto norm_gaus = std::bind(normalized_gauss, _1, test_mean, sigma); 
 
-    h_LL->Fill( -log_liklihood(&h, norm_gaus) ); 
+    pts_LL  .push_back( -log_liklihood(&h25, norm_gaus) ); 
+    pts_chi2.push_back( chi2(&h1k, norm_gaus) ); 
+
+    test_mean += dm; 
   }
   
-  auto c = new TCanvas("c", "Log-Liklihood comparison", 1400, 600);
+  auto c = new TCanvas("c", "Dependence of LL and Chi2 on mean", 1400, 600);
   c->Divide(2,1); 
   
-  
   c->cd(1); 
-  h_LL->Draw("E, HIST"); 
-
-  auto line = new TLine(LL,0., LL,h_LL->GetMaximum()); 
-  line->SetLineColor(kRed); 
-  line->Draw(); 
-
-  //draw the CDF of our LL distribution 
-  vector<double> x_LL, y_CDF; 
-  const double total_stats = h_LL->Integral(); 
-  auto ax = h_LL->GetXaxis(); 
-  double cum=0.; 
-  for (int b=1; b<=ax->GetNbins(); b++) {
-    cum += h_LL->GetBinContent(b)/total_stats; 
-    x_LL .push_back( ax->GetBinCenter(b) ); 
-    y_CDF.push_back( 1. - cum ); 
-  }
+  auto g_LL = new TGraph( pts_mean.size(), pts_mean.data(), pts_LL.data() ); 
+  g_LL->SetTitle("Variance of -LL with mean (25 pts);Mean (diff. from actual);-Log Liklihood");
+  g_LL->Draw(); 
 
   c->cd(2); 
-  auto g_CDF = new TGraph( x_LL.size(), x_LL.data(), y_CDF.data() ); 
-  g_CDF->SetLineColor(kBlack);
-  g_CDF->SetTitle("P-value from LL dist;Log Liklihood (LL);P(LL)"); 
-  g_CDF->Draw(); 
-
-  line = new TLine(LL,0., LL,1.); 
-  line->SetLineColor(kRed); 
-  line->Draw(); 
+  auto g_chi2 = new TGraph( pts_mean.size(), pts_mean.data(), pts_chi2.data() ); 
+  g_chi2->SetTitle("Variance of #chi^{2} with mean (10^{3} pts);Mean (diff. from actual);#chi^{2}");
+  g_chi2->Draw(); 
 
   return; 
 }
